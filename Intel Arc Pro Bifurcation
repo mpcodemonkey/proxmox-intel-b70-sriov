@@ -26,3 +26,7 @@ VFs will be sub-devices on the same PCIe Bus. They can be safely passed through 
 0000:e3:00.4
 
 0000:e3:00.0 is the physical GPU, and should not be passed through to a VM, or the sub-devices will fail.
+
+--NOTE--
+
+If passing through to a Windows 11 VM, you MUST select [HOST] as the virtual CPU type. Emulated CPU modes like the default [x86-64-v2-AES] will result in the driver failing to load, with a CODE 43 error.
