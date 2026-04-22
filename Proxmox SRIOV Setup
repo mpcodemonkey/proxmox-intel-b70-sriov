@@ -1,0 +1,45 @@
+ProxMox Setup for PCIe Passthrough
+
+Ensure IOMMO + SR-IOV are enabled in BIOS
+
+-Legacy Systems; Add IOMMU Support-
+
+nano /etc/default/grub
+GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on"
+	- OR -
+GRUB_CMDLINE_LINUX_DEFAULT="quiet amd_iommu=on"
+
+Save file and close
+
+update-grub
+
+
+-EFI Boot Systems; Add IOMMU Support-
+
+nano /etc/kernel/cmdline
+%> intel_iommu=on
+    - OR -
+%> amd_iommu=on
+
+Save file and close
+
+proxmox-boot-tool refresh
+
+
+-Load VFIO modules at boot-
+
+nano /etc/modules
+
+vfio
+vfio_iommu_type1
+vfio_pci
+vfio_virqfd
+
+Save file and close
+
+
+-Apply all changes-
+
+update-initramfs -u -k all
+
+--REBOOT--
