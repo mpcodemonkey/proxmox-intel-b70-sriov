@@ -1,0 +1,28 @@
+-Enable Virtual Functions (VFs) on Intel Arc Pro-
+
+Must use Proxmox 9.1.4 or higher, with Kernel 6.17.13 or higher.
+
+Ensure IOMMU / SR-IOV is enabled in Proxmox.
+
+Locate your Intel Arc Pro card on the PCIe Bus
+
+lspci | grep G21
+
+    \\ e3:00.0 Intel Battlemage G21 [Intel Graphics] \\
+
+Use the following command to bifurcate the GPU, where <num_vfs> = 1-4
+
+echo <num_vfs> > /sys/bus/pci/devices/<pci_device_path>/sriov_numvfs
+
+Example: echo 4 > /sys/bus/pci/devices/0000\:03\:00.0/sriov_numvfs
+
+This would create (4) VFs on the Intel Arc Pro B70, installed on 0000:03:00.0
+
+VFs will be sub-devices on the same PCIe Bus. They can be safely passed through to VMs as a PCIe Device.
+
+0000:e3:00.1
+0000:e3:00.2
+0000:e3:00.3
+0000:e3:00.4
+
+0000:e3:00.0 is the physical GPU, and should not be passed through to a VM, or the sub-devices will fail.
