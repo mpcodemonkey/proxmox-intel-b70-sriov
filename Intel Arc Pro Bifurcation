@@ -6,26 +6,125 @@ Ensure IOMMU / SR-IOV is enabled in Proxmox.
 
 Locate your Intel Arc Pro card on the PCIe Bus
 
-lspci | grep G21
+lspci | grep G31
 
-    \\ e3:00.0 Intel Battlemage G21 [Intel Graphics] \\
+    \\ 83:00.0 Intel Battlemage G31 [Intel Graphics] \\
 
-Use the following command to bifurcate the GPU, where <num_vfs> = 1-4
+I ran into an flr reset issue on my configuration, so this was my workaround once I had the address for my B70
+
+Create service to split the gpu into N VFs on startup (optional)
+
+nano /etc/systemd/system/bifurcate.service
+[Unit]
+Description=Split B70 into two VFs
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh /usr/local/bin/bifurcate.sh
+
+[Install]
+WantedBy=multi-user.target
+
+Save file and close
+
+nano /usr/local/bin/bifurcate.sh
+
+!#/bin/bash
+
+echo 2 > /sys/bus/pci/devices/0000\:83\:00.0/sriov_numvfs
+
+Save file and close
+
+Start the service
+
+systemctl daemon-reload
+systemctl enable bifurcate.service
+systemctl start bifurcate.service
+
+If you did not do the above, use the following command to bifurcate the GPU, where <num_vfs> = 1-4
 
 echo <num_vfs> > /sys/bus/pci/devices/<pci_device_path>/sriov_numvfs
 
 Example: echo 4 > /sys/bus/pci/devices/0000\:03\:00.0/sriov_numvfs
 
-This would create (4) VFs on the Intel Arc Pro B70, installed on 0000:03:00.0
+0000:83:00.1
+0000:83:00.2
+0000:83:00.3
+0000:83:00.4
 
-VFs will be sub-devices on the same PCIe Bus. They can be safely passed through to VMs as a PCIe Device.
+0000:83:00.0 is the physical GPU, and should not be passed through to a VM, or the sub-devices will fail.
 
-0000:e3:00.1
-0000:e3:00.2
-0000:e3:00.3
-0000:e3:00.4
+At this point I hit an FLR reset issue on my B70, where passing the VF into a virtual machine caused all VFs to be disabled due to (I think) the Xe driver trying to grab control of the VF during reset. We don't want this, so we disable the VF, then manually enable it with the vfio-pci driver
 
-0000:e3:00.0 is the physical GPU, and should not be passed through to a VM, or the sub-devices will fail.
+We create a hookscript to run at startup for our vms:
+
+nano /var/lib/vz/snippets/arc-vf-fix.sh
+(The below script is overkill and is mostly from a debug session with gemini. It can probably be sinplified but I find it cool af)
+
+#!/bin/bash
+VMID=$1
+PHASE=$2
+
+if [ "$PHASE" == "pre-start" ]; then
+    echo "=== Arc B70 SR-IOV Initialization for VM $VMID ==="
+    
+    # 1. Grab raw PCI assignment lines from the VM config file
+    RAW_CONF=$(qm config $VMID | grep -E "hostpci[0-9]")
+    echo "Raw Proxmox Config Line: $RAW_CONF"
+
+    # 2. Try to extract direct hardware IDs (e.g., 83:00.2)
+    VF_ADDRESS=$(echo "$RAW_CONF" | grep -o '83:00\.[0-9]')
+
+    # 3. Fallback: If you used Proxmox GUI "Resource Mapping", look for mapped indexes
+    if [ -z "$VF_ADDRESS" ]; then
+        # Extracts mapped lines if Proxmox formatted it like "mapping=ArcGPU,index=2"
+        MAPPED_INDEX=$(echo "$RAW_CONF" | grep -o 'index=[0-9]' | cut -d'=' -f2)
+        if [ ! -z "$MAPPED_INDEX" ]; then
+            # Convert 0-indexed mappings to standard hardware addresses (.1, .2, etc)
+            # Typically index=0 is 83:00.1, index=1 is 83:00.2, etc. Adjust if necessary.
+            VF_NUM=$((MAPPED_INDEX + 1))
+            VF_ADDRESS="83:00.$VF_NUM"
+        fi
+    fi
+
+    # 4. Critical Halt if no hardware can be parsed
+    if [ -z "$VF_ADDRESS" ]; then
+        echo "ERROR: Could not parse Arc Virtual Function address from configuration!"
+        echo "Please verify VM $VMID has an Arc device assigned in the GUI."
+        exit 1
+    fi
+
+    FULL_PCI="0000:$VF_ADDRESS"
+    echo "Targeting Hardware Address: $FULL_PCI"
+
+    # 5. Sever the active host graphics module control
+    if [ -e "/sys/bus/pci/devices/$FULL_PCI/driver/unbind" ]; then
+        echo "Unbinding $FULL_PCI from host 'xe' driver..."
+        echo "$FULL_PCI" > "/sys/bus/pci/devices/$FULL_PCI/driver/unbind" 2>/dev/null
+    else
+        echo "$FULL_PCI already unbound or isolated."
+    fi
+
+    # 6. Bind to the VFIO ecosystem (Forces /dev/vfio/9x to spawn). replace e223 with your device string
+    echo "8086 e223" > /sys/bus/pci/drivers/vfio-pci/new_id 2>/dev/null || true
+    echo "$FULL_PCI" > /sys/bus/pci/drivers/vfio-pci/bind 2>/dev/null
+    
+    echo "=== Sync Complete. Virtualization Node Spawned ==="
+fi
+
+Attach the script as a hookscript to our vm
+
+qm set 101 --hookscript local:snippets/arc-vf-fix.sh
+
+Add the VF to our vm via the config file args
+
+nano /etc/pve/qemu-server/101.conf
+args: -device vfio-pci,host=83:00.2,id=hostpci0,x-vga=on
+
+This should work for anywhere from 1-7 VFs if you see an flr reset error or you see your VFs disappear when trying to pass one into your vm.
 
 --NOTE--
 
