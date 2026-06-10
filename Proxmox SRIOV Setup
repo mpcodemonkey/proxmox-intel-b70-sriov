@@ -1,21 +1,34 @@
-ProxMox Setup for PCIe Passthrough (Supermicro H12SSL-I, AMD Epyc Cpu)
+ProxMox Setup for PCIe Passthrough
 
 Ensure IOMMO + SR-IOV are enabled in BIOS
 
--Load VFIO modules at boot-
+-Legacy Systems; Add IOMMU Support-
 
-nano /etc/modules-load.d/vfio.conf 
-
-vfio
-vfio_iommu_type1
-vfio_pci
-vfio_virqfd
+nano /etc/default/grub
+GRUB_CMDLINE_LINUX_DEFAULT="quiet intel_iommu=on"
+	- OR -
+GRUB_CMDLINE_LINUX_DEFAULT="quiet amd_iommu=on"
 
 Save file and close
 
+update-grub
 
--Apply all changes-
 
-update-initramfs -u -k all
+-EFI Boot Systems; Add IOMMU Support-
 
---REBOOT--
+nano /etc/kernel/cmdline
+%> intel_iommu=on
+    - OR -
+%> amd_iommu=on
+
+Save file and close
+
+proxmox-boot-tool refresh
+
+
+-Load VFIO modules at boot-
+
+nano /etc/modules
+
+vfio
+vfio_iommu_type1
